@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+# Common IDE/OS files that don't belong in the repo, even though none
+# happened to be present yet.
+.vscode/
+.idea/
+*.swp
+Thumbs.db

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+*.log
+# Build artifacts that tsc's project-reference build
+# (`tsc -b`, used by `npm run build`) leaves next to vite.config.ts when
+# compiling it under tsconfig.node.json's `composite: true`. Regenerated
+# on every build; never meant to be committed.
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts

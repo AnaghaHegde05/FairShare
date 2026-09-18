@@ -1,0 +1,176 @@
+// FairShare Prisma Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Neon's pooled connection (PgBouncer) doesn't support the DDL statements
+  // `prisma migrate deploy` needs, so migrations must go through a direct,
+  // unpooled connection. DATABASE_URL stays pooled for the running app;
+  // DIRECT_URL is only used by the Prisma CLI for migrations. Prisma
+  // requires DIRECT_URL to be set whenever it's referenced here (even
+  // locally against a single non-pooled Postgres) — see .env.example,
+  // where local dev points both vars at the same connection string.
+  directUrl = env("DIRECT_URL")
+}
+
+// Household roles. Deliberately just two flat roles (no
+// hierarchy, no per-permission table) since the README only calls for
+// "owner can do X, member can do Y" -- see middleware/role.ts for where
+// this is enforced. The creator of a household becomes OWNER at creation
+// time; everyone who joins via invite code becomes MEMBER (see
+// routes/household.routes.ts).
+enum Role {
+  OWNER
+  MEMBER
+}
+
+model Household {
+  id         String   @id @default(uuid())
+  name       String
+  inviteCode String   @unique @map("invite_code")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  users      User[]
+  chores     Chore[]
+  activities Activity[]
+
+  @@map("households")
+}
+
+model User {
+  id            String   @id @default(uuid())
+  name          String
+  // `username` preserves the casing the person typed at signup, purely for
+  // display (e.g. "Anagha05"). All lookups and the uniqueness constraint
+  // go through `usernameLower` instead, since Postgres's plain @unique is
+  // case-sensitive and the spec requires case-insensitive uniqueness
+  // ("Anagha05" and "anagha05" must be treated as the same username).
+  // This avoids needing the citext extension just to get there.
+  username      String   @map("username")
+  usernameLower String   @unique @map("username_lower")
+  passwordHash  String   @map("password_hash")
+  householdId   String?  @map("household_id")
+  // Meaningless while householdId is null (a user with no
+  // household has no permissions to speak of); becomes real the moment
+  // they create or join one. Defaults to MEMBER so the common "joins via
+  // invite code" path needs no extra write; household creation explicitly
+  // overrides this to OWNER for the creator (see household.routes.ts).
+  role          Role     @default(MEMBER) @map("role")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  household     Household?     @relation(fields: [householdId], references: [id], onDelete: SetNull)
+  choreLogs     ChoreLog[]
+  activities    Activity[]
+  notifications Notification[]
+
+  @@map("users")
+}
+
+model Chore {
+  id           String   @id @default(uuid())
+  householdId  String   @map("household_id")
+  name         String
+  effortWeight Int      @map("effort_weight")
+  frequency    String
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  household Household  @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  choreLogs ChoreLog[]
+
+  @@map("chores")
+}
+
+model ChoreLog {
+  id                   String   @id @default(uuid())
+  choreId              String   @map("chore_id")
+  userId               String   @map("user_id")
+  completedAt          DateTime @default(now()) @map("completed_at")
+  effortWeightSnapshot Int      @map("effort_weight_snapshot")
+  // Identifies which recurring "occurrence" of the chore this
+  // completion belongs to (e.g. "daily:2026-08-21", "weekly:2026-W34"),
+  // derived server-side from the chore's frequency and the completion's
+  // own completedAt. Combined with the @@unique below, this is what makes
+  // the database itself reject a second completion of the same occurrence
+  // -- not just the frontend hiding a button. See utils/period.ts.
+  periodKey            String   @map("period_key")
+
+  chore Chore @relation(fields: [choreId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // One completion per chore per occurrence. This is the real guarantee
+  // against double-completion (including two near-simultaneous requests
+  // for the same chore) -- the application-level check in
+  // choreLog.routes.ts just returns a friendlier error before hitting this.
+  @@unique([choreId, periodKey])
+  @@map("chore_logs")
+}
+
+// A simple, append-only household activity timeline. Not an
+// event-sourcing system: nothing is ever replayed from these rows to
+// reconstruct state, they exist purely for the "what happened recently"
+// history page. Written by the backend only, inside the same transaction
+// as the action that caused it (see services/activity.service.ts) --
+// never trusted from/created by the frontend.
+//
+// `message` is precomputed and stored at write time (the same snapshot
+// pattern as ChoreLog.effortWeightSnapshot above) so a later rename of a
+// user or chore doesn't rewrite history that already happened.
+// `metadata` carries small structured extras (e.g. effort weight, chore
+// id) for anything the frontend wants to render specially, like the
+// "+5 contribution" line under a chore-completion entry.
+model Activity {
+  id          String   @id @default(uuid())
+  householdId String   @map("household_id")
+  // Nullable + SetNull (not Cascade) so a household's history survives
+  // even if the acting user's row is ever removed later -- mirrors how
+  // User.household already uses SetNull for the same reason. No user
+  // deletion flow exists yet, but this keeps the activity log resilient
+  // if one is ever added.
+  userId      String?  @map("user_id")
+  type        String
+  message     String
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // Every activity query is "this household's activity, newest first,
+  // paginated" -- this index serves exactly that access pattern.
+  @@index([householdId, createdAt])
+  @@map("activities")
+}
+
+// Persistent, per-user in-app notifications. Deliberately not
+// an email/push system (see services/notification.service.ts) and
+// deliberately not a queue -- just rows in Postgres, read via polling.
+//
+// `dedupeKey` is what stops the backend from spamming the same
+// notification every time a GET endpoint (dashboard, chores) happens to
+// recompute a still-true condition. It's nullable because one-off,
+// inherently-single-fire notifications (e.g. "X joined the household")
+// don't need dedup -- they're only ever created once, exactly when the
+// triggering action happens. Multiple NULLs are allowed under the unique
+// constraint below, since Postgres treats NULL as distinct from NULL.
+model Notification {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  type      String
+  title     String
+  message   String
+  metadata  Json?
+  dedupeKey String?   @map("dedupe_key")
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@map("notifications")
+}

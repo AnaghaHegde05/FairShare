@@ -1,0 +1,40 @@
+# Render Blueprint — deploys the FairShare backend as a web service.
+#
+# Usage: push this file to the repo root, then in the Render Dashboard choose
+# "New > Blueprint" and point it at this repo. Render reads this file and
+# provisions the service described below.
+#
+# The Postgres database itself is NOT defined here — the project uses Neon
+# (per the original README's tech stack: "Vercel (frontend) · Render
+# (backend) · Neon (PostgreSQL)"), which is provisioned separately at
+# neon.tech and wired in via the DATABASE_URL / DIRECT_URL env vars below
+# (marked `sync: false` so Render prompts for the real values in its
+# dashboard rather than storing secrets in this file).
+
+services:
+  - type: web
+    name: fairshare-backend
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: backend
+    buildCommand: npm install && npm run build
+    # `prisma generate` also runs automatically as part of `npm run build`
+    # (see backend/package.json) so the generated client matches Render's
+    # Linux build environment rather than whatever machine it was built on.
+    preDeployCommand: npx prisma migrate deploy
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false # set to Neon's pooled connection string in the Render dashboard
+      - key: DIRECT_URL
+        sync: false # set to Neon's direct (non-pooled) connection string
+      - key: JWT_SECRET
+        generateValue: true # Render generates a random secret on first deploy
+      - key: CLIENT_ORIGIN
+        sync: false # set to your deployed Vercel URL(s), comma-separated
+      # No PORT var set here on purpose — Render injects its own PORT
+      # (10000 by default) and the app already does
+      # `process.env.PORT || 5000` in src/index.ts, so it picks that up
+      # automatically. Setting PORT explicitly isn't necessary.

@@ -1,0 +1,59 @@
+name: CI
+
+# CI pipeline: install deps -> run tests -> build backend -> build frontend,
+# for every push and pull request.
+#
+# Deliberately one linear job, top to bottom, so it's easy to read. No lint
+# step, since neither package.json currently defines one. No database
+# service container either: `npm test` (backend) is specifically the
+# DB-free unit test suite (fairness, validation, period, role,
+# notification-util — see backend/package.json); the DB-backed integration
+# tests (`npm run test:integration`) need a real PostgreSQL instance and
+# are intentionally left for local/manual runs, to keep this workflow
+# simple rather than adding a Postgres service just for CI.
+"on":
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # ---- Backend ----
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install
+
+      - name: Run backend tests
+        working-directory: backend
+        run: npm test
+
+      - name: Build backend
+        working-directory: backend
+        # `npm run build` = `prisma generate && tsc` (see package.json).
+        # `prisma generate` reads schema.prisma, which references
+        # DATABASE_URL/DIRECT_URL via env() -- it needs those variables to
+        # *exist* here, even though generate never actually connects to a
+        # database. Same placeholder approach as backend/Dockerfile.
+        env:
+          DATABASE_URL: postgresql://build:build@localhost:5432/build
+          DIRECT_URL: postgresql://build:build@localhost:5432/build
+        run: npm run build
+
+      # ---- Frontend ----
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build

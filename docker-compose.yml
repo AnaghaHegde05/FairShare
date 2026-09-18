@@ -1,0 +1,66 @@
+# Local development environment for FairShare: PostgreSQL + backend +
+# frontend, wired together so `docker compose up` is enough to get a
+# working full stack without installing Postgres or Node locally.
+#
+# Not a production/deployment setup -- the frontend runs Vite's dev
+# server, and the backend re-applies any pending Prisma migrations on
+# every start (see backend/Dockerfile).
+#
+# Every value below has a default (via `${VAR:-default}`), so this works
+# out of the box with no extra setup. To override any of them, copy
+# .env.example (in this same folder) to `.env` — docker compose loads it
+# automatically. Never commit the real `.env` (see .gitignore).
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fairshare}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fairshare_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-fairshare}
+    ports:
+      - "5432:5432"
+    volumes:
+      - fairshare_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fairshare} -d ${POSTGRES_DB:-fairshare}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      # `db` here is the other Compose service's name -- Docker's internal
+      # DNS resolves it to that container's address on the shared network.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fairshare}:${POSTGRES_PASSWORD:-fairshare_dev_password}@db:5432/${POSTGRES_DB:-fairshare}
+      DIRECT_URL: postgresql://${POSTGRES_USER:-fairshare}:${POSTGRES_PASSWORD:-fairshare_dev_password}@db:5432/${POSTGRES_DB:-fairshare}
+      JWT_SECRET: ${JWT_SECRET:-replace_with_a_long_random_secret}
+      PORT: 5000
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:5173}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      # The browser (not this container) is what actually calls this URL,
+      # so it must be the backend's HOST-mapped port (localhost:5000), not
+      # the internal service name "backend" -- the browser isn't on the
+      # Docker network.
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:5000}
+    depends_on:
+      - backend
+
+volumes:
+  fairshare_pgdata:

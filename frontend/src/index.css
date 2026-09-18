@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-paper text-ink font-body;
+    background-image:
+      linear-gradient(90deg, rgba(34, 48, 59, 0.035) 1px, transparent 1px);
+    background-size: 100% 2.1rem;
+  }
+
+  h1, h2, h3 {
+    @apply font-display;
+  }
+
+  ::selection {
+    @apply bg-pine/20;
+  }
+
+  *:focus-visible {
+    outline: 2px solid #2F6F5E;
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* A stamped, ticket-like card used for anything the household treats as
+     "official record" — the invite code, a chore's effort weight, a logged
+     entry. Perforated edge nods to a tear-off chore chart. */
+  .ticket {
+    position: relative;
+    background: #FBF9F4;
+    border: 1px solid #D8D2C2;
+    border-radius: 8px;
+  }
+  .ticket::before,
+  .ticket::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    width: 14px;
+    height: 14px;
+    background: #EEEBE2;
+    border: 1px solid #D8D2C2;
+    border-radius: 999px;
+    transform: translateY(-50%);
+  }
+  .ticket::before { left: -8px; }
+  .ticket::after { right: -8px; }
+}

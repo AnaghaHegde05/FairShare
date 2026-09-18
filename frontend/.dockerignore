@@ -1,0 +1,14 @@
+# Kept the image build fast and secret-free: none of this is
+# needed inside the image (dependencies are installed fresh in the image;
+# see Dockerfile), and .env must never be baked into an image layer.
+node_modules
+dist
+.env
+.env.*
+!.env.example
+*.log
+.git
+.gitignore
+Dockerfile
+.dockerignore
+*.md
